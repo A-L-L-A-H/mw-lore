@@ -13,6 +13,13 @@ import {
   validateAndRenderGodPromiseCard,
   validateCan0011VisualBoundary
 } from '../src/god-promise';
+import {
+  LOST_SIGNAL_CHAPTERS,
+  applyChoice,
+  createGameSession,
+  getGameSession,
+  resetGameSessions
+} from '../src/lost-signal';
 import { handleRequest } from '../src/server';
 
 const VALID_CORPUS_REF =
@@ -201,5 +208,124 @@ describe('HTTP Server Endpoints', () => {
     );
     expect(rejectedResp.status).toBe(422);
     expect((await rejectedResp.json()).valid).toBe(false);
+  });
+});
+
+describe('THE LOST SIGNAL Interactive Narrative Engine & API', () => {
+  test('maps all 8 eras (era_00..era_07) preserving exact published/draft status and covers all 13 narrative functions', () => {
+    expect(LOST_SIGNAL_CHAPTERS).toHaveLength(8);
+    expect(LOST_SIGNAL_CHAPTERS.map((ch) => ch.eraSlot)).toEqual([
+      'era_00',
+      'era_01',
+      'era_02',
+      'era_03',
+      'era_04',
+      'era_05',
+      'era_06',
+      'era_07'
+    ]);
+
+    expect(LOST_SIGNAL_CHAPTERS[0].sourceStatus).toBe('published');
+    for (const draftChapter of LOST_SIGNAL_CHAPTERS.slice(1)) {
+      expect(draftChapter.sourceStatus).toBe('draft');
+    }
+
+    const referencedFunctions = new Set<string>();
+    for (const chapter of LOST_SIGNAL_CHAPTERS) {
+      referencedFunctions.add(chapter.defaultFunctionId);
+      for (const choice of chapter.choices) {
+        referencedFunctions.add(choice.narrativeFunctionId);
+      }
+    }
+    expect(referencedFunctions.size).toBe(13);
+    for (const fn of NARRATIVE_FUNCTIONS) {
+      expect(referencedFunctions.has(fn.id)).toBe(true);
+    }
+  });
+
+  test('enforces CAN-0004 alias coexistence without auto-merging, unknown mysteryState, and CAN-0011 visual boundary', () => {
+    resetGameSessions();
+
+    const created = createGameSession('4-LAH');
+    expect(created.ok).toBe(true);
+    expect(created.session?.aliasAudit.autoMergeAllowed).toBe(false);
+    expect(created.session?.aliasAudit.rule).toBe('CAN-0004');
+    expect(created.session?.aliasAudit.matchedCharacterIds).toEqual(['char_a_lah']);
+    expect(created.session?.mysteryState).toBe('unknown');
+
+    const blockedCreate = createGameSession('Witness-01', 'Portrait of Prophet Muhammad');
+    expect(blockedCreate.ok).toBe(false);
+    expect(blockedCreate.statusCode).toBe(422);
+    expect(blockedCreate.rule).toBe('CAN-0011');
+
+    const blockedChoice = applyChoice(created.session!.id, 'ch00_tune_horizon', 'Draw Allah');
+    expect(blockedChoice.ok).toBe(false);
+    expect(blockedChoice.statusCode).toBe(422);
+    expect(blockedChoice.rule).toBe('CAN-0011');
+  });
+
+  test('traverses era_00..era_07 via HTTP API and renders playable chapter card at /', async () => {
+    resetGameSessions();
+
+    const htmlResp = await handleRequest(new Request('http://localhost:4450/'));
+    const html = await htmlResp.text();
+    expect(html).toContain('THE LOST SIGNAL // PLAYABLE CHAPTER CARD');
+    expect(html).toContain('/api/game/session');
+
+    const createResp = await handleRequest(
+      new Request('http://localhost:4450/api/game/session', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ playerAlias: 'The Shadow' })
+      })
+    );
+    expect(createResp.status).toBe(201);
+    const createdBody = await createResp.json();
+    const sessionId = createdBody.session.id as string;
+    expect(createdBody.session.currentEraSlot).toBe('era_00');
+    expect(createdBody.session.currentEraStatus).toBe('published');
+    expect(createdBody.session.mysteryState).toBe('unknown');
+
+    const getResp = await handleRequest(new Request(`http://localhost:4450/api/game/session/${sessionId}`));
+    expect(getResp.status).toBe(200);
+    expect((await getResp.json()).session.id).toBe(sessionId);
+
+    const pathChoices = [
+      'ch00_tune_horizon',
+      'ch01_log_callsigns',
+      'ch02_isolate_harmonics',
+      'ch03_archive_voltage',
+      'ch04_audit_splice',
+      'ch05_open_channel',
+      'ch06_sequence_patches',
+      'ch07_curate_signal'
+    ];
+
+    let lastSession = createdBody.session;
+    for (const choiceId of pathChoices) {
+      const choiceResp = await handleRequest(
+        new Request(`http://localhost:4450/api/game/session/${sessionId}/choice`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ choiceId })
+        })
+      );
+      expect(choiceResp.status).toBe(200);
+      const choiceBody = await choiceResp.json();
+      lastSession = choiceBody.session;
+      expect(lastSession.mysteryState).toBe('unknown');
+    }
+
+    expect(lastSession.completed).toBe(true);
+    expect(lastSession.unlockedEras).toHaveLength(8);
+    expect(lastSession.unlockedEras[0].sourceStatus).toBe('published');
+    expect(lastSession.unlockedEras[7].sourceStatus).toBe('draft');
+    expect(lastSession.witnessedFragments).toHaveLength(8);
+    expect(lastSession.faultLines).toHaveLength(8);
+    expect(lastSession.activeNarrativeFunction.name).toBe('Promoting');
+    expect(getGameSession(sessionId)?.completed).toBe(true);
+
+    const missingResp = await handleRequest(new Request('http://localhost:4450/api/game/session/nonexistent'));
+    expect(missingResp.status).toBe(404);
   });
 });
