@@ -1,0 +1,17 @@
+{
+  "name": "@a-l-l-a-h/mw-lore",
+  "version": "1.0.0",
+  "description": "MoonWitness Creative Story Bible (MW II/XII/V10), GOD PROMISE Editorial Workbench & RockSoul World",
+  "type": "module",
+  "scripts": {
+    "start": "bun run src/server.ts",
+    "dev": "bun --watch run src/server.ts",
+    "test": "bun test",
+    "typecheck": "bunx tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5.7.0"
+  },
+  "license": "UNLICENSED"
+}
