@@ -21,6 +21,11 @@ import {
   resetGameSessions
 } from '../src/lost-signal';
 import { handleRequest } from '../src/server';
+import {
+  GENESIS_HASH,
+  getLoreProvenanceById,
+  verifyProvenanceChain
+} from '../src/provenance';
 
 const VALID_CORPUS_REF =
   'mw-corpus:sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';
@@ -327,5 +332,30 @@ describe('THE LOST SIGNAL Interactive Narrative Engine & API', () => {
 
     const missingResp = await handleRequest(new Request('http://localhost:4450/api/game/session/nonexistent'));
     expect(missingResp.status).toBe(404);
+  });
+
+  test('serves GET /api/lore/provenance/:id with deterministic SHA-256 citation chain', async () => {
+    const direct = getLoreProvenanceById('era_01_before_light');
+    expect(direct).toBeDefined();
+    expect(direct?.verified).toBe(true);
+    expect(direct?.rootGenesisHash).toBe(GENESIS_HASH);
+    expect(direct?.citationChain).toHaveLength(3);
+    expect(verifyProvenanceChain(direct!.citationChain)).toBe(true);
+
+    const resp = await handleRequest(
+      new Request('http://localhost:4450/api/lore/provenance/char_the_shadow')
+    );
+    expect(resp.status).toBe(200);
+    const body = await resp.json();
+    expect(body.ok).toBe(true);
+    expect(body.provenance.id).toBe('char_the_shadow');
+    expect(body.provenance.kind).toBe('character');
+    expect(body.provenance.verified).toBe(true);
+    expect(body.provenance.leafChainHash).toMatch(/^[a-f0-9]{64}$/);
+
+    const notFound = await handleRequest(
+      new Request('http://localhost:4450/api/lore/provenance/unknown_entity_id')
+    );
+    expect(notFound.status).toBe(404);
   });
 });

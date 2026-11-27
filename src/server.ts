@@ -16,6 +16,7 @@ import {
   createGameSession,
   getGameSession
 } from './lost-signal';
+import { getLoreProvenanceById } from './provenance';
 
 const EXPLORER_HTML = `<!doctype html>
 <html lang="en">
@@ -267,6 +268,30 @@ export async function handleRequest(request: Request): Promise<Response> {
 
     const outcome = applyChoice(sessionId, body.choiceId, body.visualPrompt);
     return jsonResponse(outcome, outcome.statusCode);
+  }
+
+  const provenanceMatch = /^\/api\/lore\/provenance\/([^/]+)$/.exec(pathname);
+  if (request.method === 'GET' && provenanceMatch) {
+    const targetId = decodeURIComponent(provenanceMatch[1]!);
+    const provenance = getLoreProvenanceById(targetId);
+    if (!provenance) {
+      return jsonResponse(
+        {
+          ok: false,
+          rule: 'CAN-0003,CAN-0015',
+          error: `Lore record not found for provenance chain: ${targetId}`
+        },
+        404
+      );
+    }
+    return jsonResponse(
+      {
+        ok: true,
+        rule: 'CAN-0001..CAN-0015',
+        provenance
+      },
+      200
+    );
   }
 
   return jsonResponse({ error: 'Not Found', path: pathname }, 404);
