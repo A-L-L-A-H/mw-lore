@@ -17,6 +17,10 @@ import {
   getGameSession
 } from './lost-signal';
 import { getLoreProvenanceById } from './provenance';
+import {
+  type ProposedTimelineEvent,
+  detectLoreContradictions
+} from './contradiction-detector';
 
 const EXPLORER_HTML = `<!doctype html>
 <html lang="en">
@@ -292,6 +296,45 @@ export async function handleRequest(request: Request): Promise<Response> {
       },
       200
     );
+  }
+
+  if (
+    request.method === 'POST' &&
+    (pathname === '/api/lore/contradictions/detect' || pathname === '/api/contradictions/detect')
+  ) {
+    let body: { events?: ProposedTimelineEvent[] } | ProposedTimelineEvent[];
+    try {
+      body = (await request.json()) as { events?: ProposedTimelineEvent[] } | ProposedTimelineEvent[];
+    } catch {
+      return jsonResponse(
+        {
+          valid: false,
+          rule: 'CAN-0015',
+          error: 'Invalid JSON payload.'
+        },
+        400
+      );
+    }
+
+    const events = Array.isArray(body)
+      ? body
+      : body && typeof body === 'object' && Array.isArray(body.events)
+        ? body.events
+        : null;
+
+    if (!events) {
+      return jsonResponse(
+        {
+          valid: false,
+          rule: 'CAN-0015',
+          error: 'Request body must contain an events array.'
+        },
+        400
+      );
+    }
+
+    const report = detectLoreContradictions(events);
+    return jsonResponse(report, report.valid ? 200 : 422);
   }
 
   return jsonResponse({ error: 'Not Found', path: pathname }, 404);

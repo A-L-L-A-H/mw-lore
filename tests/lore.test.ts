@@ -26,6 +26,10 @@ import {
   getLoreProvenanceById,
   verifyProvenanceChain
 } from '../src/provenance';
+import {
+  detectLoreContradictions,
+  runContradictionCli
+} from '../src/contradiction-detector';
 
 const VALID_CORPUS_REF =
   'mw-corpus:sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';
@@ -357,5 +361,144 @@ describe('THE LOST SIGNAL Interactive Narrative Engine & API', () => {
       new Request('http://localhost:4450/api/lore/provenance/unknown_entity_id')
     );
     expect(notFound.status).toBe(404);
+  });
+
+  test('detects canonical timeline and world-rule contradictions via engine, CLI, and POST /api/lore/contradictions/detect', async () => {
+    const cleanReport = detectLoreContradictions([
+      {
+        eventId: 'evt_valid_01',
+        eraId: 'era_01_before_light',
+        eraOrder: 1,
+        status: 'published',
+        precedesEraId: 'era_02_the_arrival',
+        patchNumber: 1,
+        characterId: 'char_the_shadow',
+        canonLevel: 'lore',
+        corpusRefs: [VALID_CORPUS_REF],
+        visualPrompt: 'Monochrome static horizon over relay towers',
+      },
+      {
+        eventId: 'evt_valid_02',
+        eraId: 'era_04_electric_drift',
+        eraOrder: 4,
+        status: 'draft',
+        precedesEraId: 'era_07_riot_convergence',
+        patchNumber: 33,
+      },
+    ]);
+
+    expect(cleanReport.valid).toBe(true);
+    expect(cleanReport.contradictionCount).toBe(0);
+    expect(cleanReport.reportSha256).toMatch(/^[a-f0-9]{64}$/);
+
+    const contradictingReport = detectLoreContradictions([
+      {
+        eventId: 'evt_bad_all',
+        eraId: 'era_03_first_echo',
+        eraOrder: 9,
+        status: 'published',
+        precedesEraId: 'era_01_before_light',
+        overwritesEraId: 'era_01_before_light',
+        patchNumber: 45,
+        characterId: 'char_a_lah',
+        autoMergeTarget: 'Historical Figure',
+        canonLevel: 'editorial',
+        corpusRefs: ['raw scripture quote not allowed'],
+        visualPrompt: 'Illustration of Prophet Muhammad',
+        claimsMatterBeforeSignal: true,
+        claimsAbsoluteInvulnerability: true,
+        claimsHighOutputWithoutConduit: true,
+        claimsUncontestedMemoryWithoutHash: true,
+      },
+      {
+        eventId: 'evt_draft_overwrite',
+        eraId: 'era_05_shadow_circuit',
+        status: 'draft',
+        overwritesEraId: 'era_01_before_light',
+      },
+    ]);
+
+    expect(contradictingReport.valid).toBe(false);
+    const codes = contradictingReport.contradictions.map((c) => c.code);
+    expect(codes).toContain('CAN-0006');
+    expect(codes).toContain('CAN-0014');
+    expect(codes).toContain('CAN-0008');
+    expect(codes).toContain('CAN-0013');
+    expect(codes).toContain('CAN-0004');
+    expect(codes).toContain('CAN-0005');
+    expect(codes).toContain('CAN-0003');
+    expect(codes).toContain('CAN-0011');
+
+    const worldRulesTriggered = contradictingReport.contradictions
+      .map((c) => c.worldRuleId)
+      .filter(Boolean);
+    expect(worldRulesTriggered).toContain('wr_01');
+    expect(worldRulesTriggered).toContain('wr_02');
+    expect(worldRulesTriggered).toContain('wr_03');
+    expect(worldRulesTriggered).toContain('wr_04');
+    expect(worldRulesTriggered).toContain('wr_06');
+    expect(worldRulesTriggered).toContain('wr_08');
+    expect(worldRulesTriggered).toContain('wr_09');
+    expect(worldRulesTriggered).toContain('wr_10');
+
+    // CLI test: default canonical eras pass with exitCode 0
+    const cliDefault = runContradictionCli([]);
+    expect(cliDefault.exitCode).toBe(0);
+    expect(JSON.parse(cliDefault.stdout).valid).toBe(true);
+
+    // CLI test: contradicting JSON exits with code 1
+    const cliFail = runContradictionCli([
+      '--events',
+      JSON.stringify([
+        {
+          eventId: 'cli_bad_1',
+          eraId: 'era_02_the_arrival',
+          status: 'published',
+        },
+      ]),
+    ]);
+    expect(cliFail.exitCode).toBe(1);
+    expect(JSON.parse(cliFail.stdout).valid).toBe(false);
+
+    // HTTP endpoint test: valid payload returns 200
+    const httpOk = await handleRequest(
+      new Request('http://localhost:4450/api/lore/contradictions/detect', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          events: [
+            {
+              eventId: 'http_ok_1',
+              eraId: 'era_01_before_light',
+              status: 'published',
+            },
+          ],
+        }),
+      })
+    );
+    expect(httpOk.status).toBe(200);
+    expect((await httpOk.json()).valid).toBe(true);
+
+    // HTTP endpoint test: contradiction returns 422
+    const httpFail = await handleRequest(
+      new Request('http://localhost:4450/api/lore/contradictions/detect', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          events: [
+            {
+              eventId: 'http_bad_1',
+              eraId: 'era_06_blue_inversion',
+              status: 'draft',
+              overwritesEraId: 'era_01_before_light',
+            },
+          ],
+        }),
+      })
+    );
+    expect(httpFail.status).toBe(422);
+    const failBody = await httpFail.json();
+    expect(failBody.valid).toBe(false);
+    expect(failBody.contradictionCount).toBe(1);
   });
 });
